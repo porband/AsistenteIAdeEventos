@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+import json
 
 app = FastAPI(
     title="Asistente IA de Eventos",
@@ -35,3 +37,15 @@ async def verificar_webhook(request: Request):
         return int(challenge)
 
     return {"error": "Token incorrecto"}
+
+@app.post("/webhook")
+async def recibir_webhook(request: Request):
+
+    data = await request.json()
+
+    print("\n==========================")
+    print("MENSAJE RECIBIDO")
+    print("==========================")
+    print(json.dumps(data, indent=4, ensure_ascii=False))
+
+    return PlainTextResponse("EVENT_RECEIVED", status_code=200)
