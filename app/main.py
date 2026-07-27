@@ -22,7 +22,7 @@ def salud():
 # WEBHOOK DE META
 # ---------------------------
 
-VERIFY_TOKEN = "mi_token_secreto"
+VERIFY_TOKEN = "AsistenteIAEventos2026"
 
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
