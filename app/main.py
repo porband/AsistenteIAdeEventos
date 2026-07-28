@@ -24,7 +24,7 @@ def salud():
 # WEBHOOK DE META
 # ---------------------------
 
-VERIFY_TOKEN = "AsistenteIAEventos2026"
+from app.config import VERIFY_TOKEN
 
 @app.get("/webhook")
 async def verificar_webhook(request: Request):
