@@ -6,9 +6,6 @@ from app.config import VERIFY_TOKEN
 from app.typebot import TypebotClient
 from app.whatsapp import enviar_mensaje
 
-from app.typebot import TypebotClient
-from app.whatsapp import enviar_mensaje
-
 app = FastAPI(
     title="Asistente IA de Eventos",
     version="1.0.0"
@@ -53,6 +50,46 @@ async def verificar_webhook(request: Request):
 
 
 # -------------------------------------------------
+# UTILIDAD: extraer texto plano de la respuesta de Typebot
+# -------------------------------------------------
+
+def extraer_texto_typebot(respuesta: dict) -> str | None:
+    """
+    Typebot puede devolver el contenido de un mensaje como:
+      - string plano
+      - dict tipo richText: {"type": "richText", "richText": [...]}
+    Esta función devuelve siempre un string plano, o None si no
+    encontró texto utilizable.
+    """
+    if not isinstance(respuesta, dict):
+        return None
+
+    for item in respuesta.get("messages", []):
+        contenido = item.get("content")
+
+        # Caso 1: ya viene como texto plano
+        if isinstance(contenido, str) and contenido.strip():
+            return contenido.strip()
+
+        # Caso 2: viene como richText
+        if isinstance(contenido, dict) and contenido.get("type") == "richText":
+            partes = []
+            for bloque in contenido.get("richText", []):
+                linea = "".join(
+                    hijo.get("text", "")
+                    for hijo in bloque.get("children", [])
+                    if "text" in hijo
+                )
+                if linea:
+                    partes.append(linea)
+            texto = "\n".join(partes).strip()
+            if texto:
+                return texto
+
+    return None
+
+
+# -------------------------------------------------
 # RECEPCIÓN DE MENSAJES
 # -------------------------------------------------
 
@@ -67,24 +104,25 @@ async def recibir_webhook(request: Request):
     print(json.dumps(data, indent=4, ensure_ascii=False))
 
     try:
+        entry_list = data.get("entry") or []
+        if not entry_list:
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
-        entry = data["entry"][0]
-        changes = entry["changes"][0]
-        value = changes["value"]
+        changes_list = entry_list[0].get("changes") or []
+        if not changes_list:
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
-        if "messages" not in value:
-            return PlainTextResponse(
-                "EVENT_RECEIVED",
-                status_code=200
-            )
+        value = changes_list[0].get("value") or {}
+
+        if "messages" not in value or not value["messages"]:
+            # Puede ser un evento de "status" (entregado/leído), no un mensaje nuevo
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
         mensaje = value["messages"][0]
 
-        if mensaje["type"] != "text":
-            return PlainTextResponse(
-                "EVENT_RECEIVED",
-                status_code=200
-            )
+        if mensaje.get("type") != "text":
+            print("Mensaje no es de texto, se ignora.")
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
         telefono = mensaje["from"]
         texto = mensaje["text"]["body"]
@@ -94,118 +132,21 @@ async def recibir_webhook(request: Request):
 
         print("\nEnviando a Typebot...")
 
-        bot = TypebotClient()
-        respuesta = bot.send_message(
-            telefono,
-            texto
-        )
+        respuesta = typebot.send_message(telefono, texto)
 
         print("\nRespuesta Typebot:")
         print(json.dumps(respuesta, indent=4, ensure_ascii=False))
 
-        texto_respuesta = None
-
-        if "messages" in respuesta:
-
-            for item in respuesta["messages"]:
-
-                if item.get("type") == "text":
-                    texto_respuesta = item.get("content")
-                    break
+        texto_respuesta = extraer_texto_typebot(respuesta)
 
         if texto_respuesta:
-
             print(f"\nEnviando a WhatsApp:\n{texto_respuesta}")
-
-            enviar_mensaje(
-                telefono,
-                texto_respuesta
-            )
-
+            enviar_mensaje(telefono, texto_respuesta)
         else:
-
-            print("Typebot no devolvió texto.")
+            print("Typebot no devolvió texto utilizable.")
 
     except Exception as e:
-
         print("\nERROR")
         print(e)
 
-    return PlainTextResponse(
-        "EVENT_RECEIVED",
-        status_code=200
-    )
-    try:
-
-        if "entry" not in data:
-            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
-
-        entry = data["entry"][0]
-
-        if "changes" not in entry:
-            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
-
-        value = entry["changes"][0]["value"]
-
-        if "messages" not in value:
-            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
-
-        mensaje = value["messages"][0]
-
-        numero = mensaje["from"]
-
-        if mensaje["type"] != "text":
-            print("Mensaje no es de texto.")
-            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
-
-        texto = mensaje["text"]["body"]
-
-        print(f"Usuario : {numero}")
-        print(f"Mensaje : {texto}")
-
-        respuesta = typebot.send_message(
-            numero,
-            texto
-        )
-
-        print("\nRESPUESTA TYPEBOT")
-        print(json.dumps(respuesta, indent=4, ensure_ascii=False))
-
-        texto_respuesta = None
-
-        if isinstance(respuesta, dict):
-
-            messages = respuesta.get("messages", [])
-
-            for item in messages:
-
-                if item.get("type") == "text":
-
-                    contenido = item.get("content")
-
-                    if contenido:
-                        texto_respuesta = contenido
-                        break
-
-        if texto_respuesta:
-
-            enviar_mensaje(
-                numero,
-                texto_respuesta
-            )
-
-            print("Respuesta enviada correctamente.")
-
-        else:
-
-            print("Typebot no devolvió texto.")
-
-    except Exception as e:
-
-        print("\nERROR")
-        print(e)
-
-    return PlainTextResponse(
-        "EVENT_RECEIVED",
-        status_code=200
-    )
+    return PlainTextResponse("EVENT_RECEIVED", status_code=200)
