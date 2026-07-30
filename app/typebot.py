@@ -15,6 +15,10 @@ from app.config import (
 # ----------------------------------------------------------
 # Sesiones temporales (Versión 1)
 # ----------------------------------------------------------
+# NOTA: esto vive en memoria. Si Railway reinicia o redespliega
+# el servidor, este diccionario se borra y todos los usuarios
+# arrancan una sesión nueva automáticamente (no rompe nada,
+# solo "olvida" en qué paso del flujo iba cada quien).
 
 # WhatsApp -> sessionId
 sessions = {}
@@ -34,6 +38,9 @@ class TypebotClient:
 
     def save_session(self, phone_number, session_id):
         sessions[phone_number] = session_id
+
+    def clear_session(self, phone_number):
+        sessions.pop(phone_number, None)
 
     def start_chat(self, phone_number):
 
@@ -78,7 +85,30 @@ class TypebotClient:
 
         session = self.get_session(phone_number)
 
+        # Caso 1: no hay sesión guardada -> crear una nueva
         if session is None:
             session = self.start_chat(phone_number)
+            return self.continue_chat(session, message)
 
-        return self.continue_chat(session, message)
+        # Caso 2: ya había sesión -> intentar usarla
+        try:
+            return self.continue_chat(session, message)
+
+        except requests.exceptions.HTTPError as error:
+            respuesta_http = error.response
+
+            # La sesión expiró o ya no existe en Typebot (404):
+            # descartamos la sesión vieja, creamos una nueva y
+            # reintentamos UNA vez con el mismo mensaje.
+            if respuesta_http is not None and respuesta_http.status_code == 404:
+                print(
+                    f"\nSesión de Typebot expirada para {phone_number}. "
+                    "Creando una sesión nueva..."
+                )
+                self.clear_session(phone_number)
+                session = self.start_chat(phone_number)
+                return self.continue_chat(session, message)
+
+            # Cualquier otro error HTTP (500, 401, etc.) se propaga,
+            # para no ocultar problemas reales de configuración.
+            raise
