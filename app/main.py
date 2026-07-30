@@ -13,6 +13,11 @@ app = FastAPI(
 
 typebot = TypebotClient()
 
+# WhatsApp -> {id_boton: texto_completo_original}
+# Se usa para reenviar a Typebot el texto EXACTO de la opción elegida,
+# ya que WhatsApp trunca los títulos de botón a 20 caracteres.
+opciones_pendientes: dict[str, dict[str, str]] = {}
+
 
 @app.get("/")
 def inicio():
@@ -130,9 +135,13 @@ async def recibir_webhook(request: Request):
             sub_tipo = interactive.get("type")
 
             if sub_tipo == "button_reply":
-                texto = interactive["button_reply"]["title"]
+                boton_id = interactive["button_reply"]["id"]
+                titulo_truncado = interactive["button_reply"]["title"]
+                texto = opciones_pendientes.get(telefono, {}).get(boton_id, titulo_truncado)
             elif sub_tipo == "list_reply":
-                texto = interactive["list_reply"]["title"]
+                fila_id = interactive["list_reply"]["id"]
+                titulo_truncado = interactive["list_reply"]["title"]
+                texto = opciones_pendientes.get(telefono, {}).get(fila_id, titulo_truncado)
             else:
                 print(f"Tipo interactive no manejado: {sub_tipo}")
                 return PlainTextResponse("EVENT_RECEIVED", status_code=200)
@@ -158,13 +167,28 @@ async def recibir_webhook(request: Request):
         if isinstance(input_block, dict) and input_block.get("type") == "choice input":
             for item in input_block.get("items", []):
                 contenido = item.get("content")
-                if contenido:
+
+                # Blindaje: si algún día 'content' deja de ser string
+                # (ej. llega como richText), lo convertimos con la misma
+                # lógica que usamos para los mensajes de texto.
+                if isinstance(contenido, dict):
+                    contenido = extraer_texto_typebot({"messages": [{"content": contenido}]})
+
+                if isinstance(contenido, str) and contenido.strip():
                     opciones.append({
                         "id": item.get("id"),
-                        "title": contenido,
+                        "title": contenido.strip(),
                     })
 
         cuerpo = texto_respuesta or "Elige una opción:"
+
+        if opciones:
+            # Guardamos el texto COMPLETO de cada opción, indexado por
+            # el id del botón, para recuperarlo exacto cuando el usuario
+            # toque uno (WhatsApp nos devolvería el título truncado).
+            opciones_pendientes[telefono] = {
+                o["id"]: o["title"] for o in opciones if o.get("id")
+            }
 
         if opciones and len(opciones) <= 3:
             print(f"\nEnviando botones a WhatsApp: {[o['title'] for o in opciones]}")
