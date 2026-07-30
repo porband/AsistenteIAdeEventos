@@ -4,7 +4,7 @@ import json
 
 from app.config import VERIFY_TOKEN
 from app.typebot import TypebotClient
-from app.whatsapp import enviar_mensaje, enviar_botones, enviar_lista
+from app.whatsapp import enviar_mensaje, enviar_botones, enviar_lista, enviar_imagen
 
 app = FastAPI(
     title="Asistente IA de Eventos",
@@ -160,17 +160,56 @@ async def recibir_webhook(request: Request):
         print("\nRespuesta Typebot:")
         print(json.dumps(respuesta, indent=4, ensure_ascii=False))
 
-        texto_respuesta = extraer_texto_typebot(respuesta)
-        input_block = respuesta.get("input") if isinstance(respuesta, dict) else None
+        if not isinstance(respuesta, dict):
+            print("Respuesta de Typebot con formato inesperado.")
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
+        algo_enviado = False
+
+        # -----------------------------------------------------
+        # 1) Recorrer TODOS los mensajes (imagen, texto, etc.)
+        #    en el orden en que Typebot los mandó
+        # -----------------------------------------------------
+        for item in respuesta.get("messages", []):
+            tipo_item = item.get("type")
+
+            if tipo_item == "text":
+                contenido = item.get("content")
+
+                if isinstance(contenido, dict):
+                    texto_item = extraer_texto_typebot({"messages": [item]})
+                elif isinstance(contenido, str):
+                    texto_item = contenido.strip()
+                else:
+                    texto_item = None
+
+                if texto_item:
+                    print(f"\nEnviando texto a WhatsApp:\n{texto_item}")
+                    enviar_mensaje(telefono, texto_item)
+                    algo_enviado = True
+
+            elif tipo_item == "image":
+                url_imagen = (item.get("content") or {}).get("url")
+
+                if url_imagen:
+                    print(f"\nEnviando imagen a WhatsApp: {url_imagen}")
+                    enviar_imagen(telefono, url_imagen)
+                    algo_enviado = True
+
+            else:
+                print(f"Tipo de mensaje de Typebot aún no manejado: {tipo_item}")
+
+        # -----------------------------------------------------
+        # 2) Si el siguiente paso del flujo es un choice input,
+        #    mandar botones (o lista) al final
+        # -----------------------------------------------------
+        input_block = respuesta.get("input")
         opciones = []
+
         if isinstance(input_block, dict) and input_block.get("type") == "choice input":
             for item in input_block.get("items", []):
                 contenido = item.get("content")
 
-                # Blindaje: si algún día 'content' deja de ser string
-                # (ej. llega como richText), lo convertimos con la misma
-                # lógica que usamos para los mensajes de texto.
                 if isinstance(contenido, dict):
                     contenido = extraer_texto_typebot({"messages": [{"content": contenido}]})
 
@@ -180,8 +219,6 @@ async def recibir_webhook(request: Request):
                         "title": contenido.strip(),
                     })
 
-        cuerpo = texto_respuesta or "Elige una opción:"
-
         if opciones:
             # Guardamos el texto COMPLETO de cada opción, indexado por
             # el id del botón, para recuperarlo exacto cuando el usuario
@@ -190,20 +227,19 @@ async def recibir_webhook(request: Request):
                 o["id"]: o["title"] for o in opciones if o.get("id")
             }
 
-        if opciones and len(opciones) <= 3:
-            print(f"\nEnviando botones a WhatsApp: {[o['title'] for o in opciones]}")
-            enviar_botones(telefono, cuerpo, opciones)
+            cuerpo_opciones = "Elige una opción:"
 
-        elif opciones:
-            print(f"\nEnviando lista a WhatsApp: {[o['title'] for o in opciones]}")
-            enviar_lista(telefono, cuerpo, opciones)
+            if len(opciones) <= 3:
+                print(f"\nEnviando botones a WhatsApp: {[o['title'] for o in opciones]}")
+                enviar_botones(telefono, cuerpo_opciones, opciones)
+            else:
+                print(f"\nEnviando lista a WhatsApp: {[o['title'] for o in opciones]}")
+                enviar_lista(telefono, cuerpo_opciones, opciones)
 
-        elif texto_respuesta:
-            print(f"\nEnviando texto a WhatsApp:\n{texto_respuesta}")
-            enviar_mensaje(telefono, texto_respuesta)
+            algo_enviado = True
 
-        else:
-            print("Typebot no devolvió texto ni opciones utilizables.")
+        if not algo_enviado:
+            print("Typebot no devolvió contenido enviable.")
 
     except Exception as e:
         print("\nERROR")

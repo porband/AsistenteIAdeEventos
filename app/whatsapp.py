@@ -56,6 +56,23 @@ def enviar_mensaje(numero: str, mensaje: str):
     return _post(payload)
 
 
+def enviar_imagen(numero: str, url_imagen: str, caption: str | None = None):
+    """Manda una imagen por WhatsApp a partir de una URL pública."""
+
+    imagen_payload = {"link": url_imagen}
+    if caption:
+        imagen_payload["caption"] = caption
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": numero,
+        "type": "image",
+        "image": imagen_payload
+    }
+
+    return _post(payload)
+
+
 def enviar_botones(numero: str, texto: str, opciones: list[dict]):
     """
     Manda hasta 3 botones de respuesta rápida (WhatsApp Reply Buttons).
