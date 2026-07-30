@@ -58,6 +58,23 @@ async def verificar_webhook(request: Request):
 # UTILIDAD: extraer texto plano de la respuesta de Typebot
 # -------------------------------------------------
 
+def _extraer_texto_de_children(children: list) -> str:
+    """
+    Recorre recursivamente una lista de 'children' de richText y devuelve
+    todo el texto encontrado, sin importar cuántos niveles de anidamiento
+    tenga (por ejemplo, texto dentro de un link: {"type": "a", "children": [...]}).
+    """
+    partes = []
+    for nodo in children:
+        if not isinstance(nodo, dict):
+            continue
+        if "text" in nodo:
+            partes.append(nodo["text"])
+        if "children" in nodo:
+            partes.append(_extraer_texto_de_children(nodo["children"]))
+    return "".join(partes)
+
+
 def extraer_texto_typebot(respuesta: dict) -> str | None:
     """
     Typebot puede devolver el contenido de un mensaje como:
@@ -80,11 +97,7 @@ def extraer_texto_typebot(respuesta: dict) -> str | None:
         if isinstance(contenido, dict) and contenido.get("type") == "richText":
             partes = []
             for bloque in contenido.get("richText", []):
-                linea = "".join(
-                    hijo.get("text", "")
-                    for hijo in bloque.get("children", [])
-                    if "text" in hijo
-                )
+                linea = _extraer_texto_de_children(bloque.get("children", []))
                 if linea:
                     partes.append(linea)
             texto = "\n".join(partes).strip()
@@ -165,13 +178,16 @@ async def recibir_webhook(request: Request):
             return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
         algo_enviado = False
+        mensajes_typebot = respuesta.get("messages", [])
+        texto_final_pendiente = None  # se usará como cuerpo de los botones, si los hay
 
         # -----------------------------------------------------
         # 1) Recorrer TODOS los mensajes (imagen, texto, etc.)
         #    en el orden en que Typebot los mandó
         # -----------------------------------------------------
-        for item in respuesta.get("messages", []):
+        for idx, item in enumerate(mensajes_typebot):
             tipo_item = item.get("type")
+            es_ultimo = idx == len(mensajes_typebot) - 1
 
             if tipo_item == "text":
                 contenido = item.get("content")
@@ -183,7 +199,12 @@ async def recibir_webhook(request: Request):
                 else:
                     texto_item = None
 
-                if texto_item:
+                if texto_item and es_ultimo:
+                    # Si es el último mensaje, lo guardamos: puede terminar
+                    # siendo el cuerpo de los botones (si los hay) en vez
+                    # de mandarse como una burbuja de texto aparte.
+                    texto_final_pendiente = texto_item
+                elif texto_item:
                     print(f"\nEnviando texto a WhatsApp:\n{texto_item}")
                     enviar_mensaje(telefono, texto_item)
                     algo_enviado = True
@@ -197,7 +218,9 @@ async def recibir_webhook(request: Request):
                     algo_enviado = True
 
             else:
-                print(f"Tipo de mensaje de Typebot aún no manejado: {tipo_item}")
+                print("\n===== MENSAJE DE TYPEBOT NO SOPORTADO =====")
+                print(json.dumps(item, indent=4, ensure_ascii=False))
+                print("============================================")
 
         # -----------------------------------------------------
         # 2) Si el siguiente paso del flujo es un choice input,
@@ -227,7 +250,9 @@ async def recibir_webhook(request: Request):
                 o["id"]: o["title"] for o in opciones if o.get("id")
             }
 
-            cuerpo_opciones = "Elige una opción:"
+            # Usamos el último texto de Typebot como cuerpo del mensaje
+            # de botones, en vez de un genérico repetido.
+            cuerpo_opciones = texto_final_pendiente or "Elige una opción:"
 
             if len(opciones) <= 3:
                 print(f"\nEnviando botones a WhatsApp: {[o['title'] for o in opciones]}")
@@ -236,6 +261,12 @@ async def recibir_webhook(request: Request):
                 print(f"\nEnviando lista a WhatsApp: {[o['title'] for o in opciones]}")
                 enviar_lista(telefono, cuerpo_opciones, opciones)
 
+            algo_enviado = True
+
+        elif texto_final_pendiente:
+            # No hay botones después: el último texto se manda normal.
+            print(f"\nEnviando texto a WhatsApp:\n{texto_final_pendiente}")
+            enviar_mensaje(telefono, texto_final_pendiente)
             algo_enviado = True
 
         if not algo_enviado:
