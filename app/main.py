@@ -4,7 +4,7 @@ import json
 
 from app.config import VERIFY_TOKEN
 from app.typebot import TypebotClient
-from app.whatsapp import enviar_mensaje
+from app.whatsapp import enviar_mensaje, enviar_botones, enviar_lista
 
 app = FastAPI(
     title="Asistente IA de Eventos",
@@ -119,13 +119,27 @@ async def recibir_webhook(request: Request):
             return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
         mensaje = value["messages"][0]
-
-        if mensaje.get("type") != "text":
-            print("Mensaje no es de texto, se ignora.")
-            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
-
         telefono = mensaje["from"]
-        texto = mensaje["text"]["body"]
+        tipo_mensaje = mensaje.get("type")
+
+        if tipo_mensaje == "text":
+            texto = mensaje["text"]["body"]
+
+        elif tipo_mensaje == "interactive":
+            interactive = mensaje.get("interactive", {})
+            sub_tipo = interactive.get("type")
+
+            if sub_tipo == "button_reply":
+                texto = interactive["button_reply"]["title"]
+            elif sub_tipo == "list_reply":
+                texto = interactive["list_reply"]["title"]
+            else:
+                print(f"Tipo interactive no manejado: {sub_tipo}")
+                return PlainTextResponse("EVENT_RECEIVED", status_code=200)
+
+        else:
+            print(f"Mensaje tipo '{tipo_mensaje}' no manejado, se ignora.")
+            return PlainTextResponse("EVENT_RECEIVED", status_code=200)
 
         print(f"\nUsuario: {telefono}")
         print(f"Mensaje: {texto}")
@@ -138,12 +152,34 @@ async def recibir_webhook(request: Request):
         print(json.dumps(respuesta, indent=4, ensure_ascii=False))
 
         texto_respuesta = extraer_texto_typebot(respuesta)
+        input_block = respuesta.get("input") if isinstance(respuesta, dict) else None
 
-        if texto_respuesta:
-            print(f"\nEnviando a WhatsApp:\n{texto_respuesta}")
+        opciones = []
+        if isinstance(input_block, dict) and input_block.get("type") == "choice input":
+            for item in input_block.get("items", []):
+                contenido = item.get("content")
+                if contenido:
+                    opciones.append({
+                        "id": item.get("id"),
+                        "title": contenido,
+                    })
+
+        cuerpo = texto_respuesta or "Elige una opción:"
+
+        if opciones and len(opciones) <= 3:
+            print(f"\nEnviando botones a WhatsApp: {[o['title'] for o in opciones]}")
+            enviar_botones(telefono, cuerpo, opciones)
+
+        elif opciones:
+            print(f"\nEnviando lista a WhatsApp: {[o['title'] for o in opciones]}")
+            enviar_lista(telefono, cuerpo, opciones)
+
+        elif texto_respuesta:
+            print(f"\nEnviando texto a WhatsApp:\n{texto_respuesta}")
             enviar_mensaje(telefono, texto_respuesta)
+
         else:
-            print("Typebot no devolvió texto utilizable.")
+            print("Typebot no devolvió texto ni opciones utilizables.")
 
     except Exception as e:
         print("\nERROR")
