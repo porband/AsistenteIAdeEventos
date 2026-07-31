@@ -60,7 +60,11 @@ class TypebotClient:
 
         self.save_session(phone_number, session_id)
 
-        return session_id
+        # Devolvemos la respuesta COMPLETA (no solo el id), porque ya
+        # trae el mensaje de bienvenida y el primer bloque de entrada
+        # (por ejemplo, el menú). Esto tiene la misma forma que la
+        # respuesta de continue_chat: {"messages": [...], "input": {...}}
+        return data
 
     def continue_chat(self, session_id, message):
 
@@ -85,12 +89,15 @@ class TypebotClient:
 
         session = self.get_session(phone_number)
 
-        # Caso 1: no hay sesión guardada -> crear una nueva
+        # Caso 1: no hay sesión guardada -> es un chat nuevo.
+        # El "Hola" (o lo que sea que haya escrito el usuario) es solo
+        # el disparador para arrancar la conversación; NO se reenvía
+        # como respuesta a nada, porque el propio startChat ya trae
+        # el mensaje de bienvenida y el primer bloque de entrada.
         if session is None:
-            session = self.start_chat(phone_number)
-            return self.continue_chat(session, message)
+            return self.start_chat(phone_number)
 
-        # Caso 2: ya había sesión -> intentar usarla
+        # Caso 2: ya había sesión -> intentar continuar la conversación
         try:
             return self.continue_chat(session, message)
 
@@ -98,16 +105,15 @@ class TypebotClient:
             respuesta_http = error.response
 
             # La sesión expiró o ya no existe en Typebot (404):
-            # descartamos la sesión vieja, creamos una nueva y
-            # reintentamos UNA vez con el mismo mensaje.
+            # descartamos la sesión vieja y arrancamos una conversación
+            # nueva desde cero (igual que el Caso 1).
             if respuesta_http is not None and respuesta_http.status_code == 404:
                 print(
                     f"\nSesión de Typebot expirada para {phone_number}. "
-                    "Creando una sesión nueva..."
+                    "Reiniciando conversación desde cero..."
                 )
                 self.clear_session(phone_number)
-                session = self.start_chat(phone_number)
-                return self.continue_chat(session, message)
+                return self.start_chat(phone_number)
 
             # Cualquier otro error HTTP (500, 401, etc.) se propaga,
             # para no ocultar problemas reales de configuración.
